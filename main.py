@@ -3,6 +3,7 @@ import copy
 from dataclasses import dataclass
 import json
 import os
+import pickle
 import random
 import time
 from typing import Callable, Dict, List, Optional, Tuple
@@ -10,12 +11,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import openai
 import pandas as pd
-import pickle
 import torch
 
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 
-from transformer_lens import HookedTransformer
+from transformer_lens import HookedTransformer # pip install git+https://github.com/neelnanda-io/TransformerLens
 
 from datasets import load_dataset
 
@@ -465,10 +466,19 @@ def main() -> None:
         for game_player in game_players:
             game_player.run_turn()
         
-        if turn_ndx % 3 == 0:
+        if turn_ndx % 1 == 0:
             results = []
             for game_player in game_players:
                 top_condition = sorted(game_player.suggestions, key=lambda x: x.lcb, reverse=True)[0]
+                p_val_correction = len(game_player.suggestions) * len(game_players) * (22 / len(top_condition.datapoints))
+
+                # Add line breaks to the condition every 40 characters
+                condition_w_breaks = top_condition.condition
+                if len(condition_w_breaks) > 40:
+                    n_breaks = len(condition_w_breaks) // 40
+                    for i in range(n_breaks):
+                        condition_w_breaks = condition_w_breaks[:40 * (i + 1) + i] + "\n" + condition_w_breaks[40 * (i + 1) + i:]
+
                 results.append({
                     "layer": game_player.layer,
                     "neuron": game_player.neuron,
@@ -476,8 +486,8 @@ def main() -> None:
                     "score": top_condition.score,
                     "lcb": top_condition.lcb,
                     "ucb": top_condition.ucb,
-                    "p_val": top_condition.p_val,
-                    "description": f"Layer: {game_player.layer}, Neuron: {game_player.neuron},\nCondition: '{top_condition.condition}'"
+                    "p_val": top_condition.p_val * p_val_correction,
+                    "description": f"Layer: {game_player.layer}, Neuron: {game_player.neuron},\nCondition: '{condition_w_breaks}'"
                 })
             
             # Plot as a horizontal bar chart in descending order of score, with error bars
@@ -491,10 +501,23 @@ def main() -> None:
             # Make large figure
             fig, ax = plt.subplots(figsize=(10, 5), )
 
-            # Colour the bars by the log of the p-value
-            colours = np.log(df["p_val"])
-            colours = (colours - colours.min()) / (colours.max() - colours.min())
-            colours = plt.cm.viridis(colours)
+            # Colours is purple if p_val < 1e-6, blue if p_val < 1e-4, green if p_val < 1e-2, yellow if p_val < 1e1, red if p_val > 1e1
+            colours = pd.Series(["red"] * len(df))
+            colours[df["p_val"] < 1e-6] = "purple"
+            colours[df["p_val"] < 1e-4] = "blue"
+            colours[df["p_val"] < 1e-2] = "green"
+            colours[df["p_val"] < 1e1] = "yellow"
+
+            # Add colour legend
+            legend_elements = [
+                Line2D([0], [0], marker='o', color='w', label='p_val < 1e-6', markerfacecolor='purple', markersize=10),
+                Line2D([0], [0], marker='o', color='w', label='p_val < 1e-4', markerfacecolor='blue', markersize=10),
+                Line2D([0], [0], marker='o', color='w', label='p_val < 1e-2', markerfacecolor='green', markersize=10),
+                Line2D([0], [0], marker='o', color='w', label='p_val < 1e-1', markerfacecolor='yellow', markersize=10),
+                Line2D([0], [0], marker='o', color='w', label='p_val > 1e-1', markerfacecolor='red', markersize=10),
+            ]
+            ax.legend(handles=legend_elements, loc='lower right')
+            
             ax.barh(df["description"], df["score"], xerr=(df["score"] - df["lcb"], df["ucb"] - df["score"]), color=colours)
 
             ax.set_xlabel("Score")
@@ -506,9 +529,6 @@ def main() -> None:
             plt.rcParams.update({'font.size': 6})
             plt.subplots_adjust(left=0.5)
             plt.savefig(f"graphs/top_conditions_{turn_ndx}.png")
-
-
-
 
 
 if __name__ == "__main__":
