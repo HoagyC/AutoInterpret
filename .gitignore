@@ -1,0 +1,11 @@
+secrets.json
+saved/
+.env/
+main.py
+__pycache__/
+internals.pkl
+.vscode/settings.json
+
+found_conditions/
+graphs/
+internals/
