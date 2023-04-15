@@ -67,9 +67,6 @@ def get_wiki_sentences(n: int = 5000) -> List[str]:
     return sentence_list
 
 def make_internals_func(layer_n: int, neuron_n: int):
-    layer_n = 6 # Must be between 0 and 11 (inclusive)
-    neuron_n = 0 # Must be between 0 and 3071 (inclusive)
-
     def compute_internals_single(model: HookedTransformer, input_txt: str) -> float:
         tokens = model.to_tokens(input_txt)
         _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)

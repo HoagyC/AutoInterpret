@@ -5,3 +5,5 @@ pandas==2.0.0
 scipy==1.10.1
 torch==2.0.0
 transformer-lens @ git+https://github.com/neelnanda-io/TransformerLens@d48e72a69833881b32fddcba06455ac0000d8ba2
+
+# Example scp command for secrets on vast.ai: scp -P 21502 secrets.json root@ssh4.vast.ai:/root/AutoInterpret
