@@ -1,18 +1,21 @@
 # %%
-import datasets
-import torch
 import os
+import pickle
 import re
+import sys
+from pathlib import Path
 from typing import List, Tuple
-import numpy as np
 
+import datasets
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch
 import tqdm
 from transformer_lens import HookedTransformer
 
-os.chdir("..")
+
 # %%
 import main
 
@@ -61,8 +64,12 @@ def get_activations_batched(texts: List[str], batch_size: int = 32) -> Tuple[Lis
 
 
 # %%
-activations, next_tokens = get_activations_batched(dataset_texts, batch_size=4)
-len(activations)
+activations, next_tokens = get_activations_batched(dataset_texts[:4], batch_size=4)
+pickle.dump(activations, "activations.pickle")
+pickle.dump(next_tokens, "next_tokens.pickle")
+
+# %%
+exit()
 
 # %%
 # FRUITS
