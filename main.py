@@ -1,6 +1,7 @@
 import argparse
 import copy
 from dataclasses import dataclass
+import itertools
 import json
 import os
 import pickle
@@ -22,7 +23,7 @@ from transformer_lens import HookedTransformer # pip install git+https://github.
 
 from datasets import load_dataset
 
-from utils import pearsonr_ci
+from utils import pearsonr_ci, download_from_aws
 
 # Format is (binary_condition, text, answer)
 
@@ -56,7 +57,7 @@ def draw_histogram(activations: List[torch.Tensor]) -> None:
 
 def get_wiki_sentences(n: int = 5000) -> List[str]:
     sentence_list: List[str] = []
-    wiki_dataset = load_dataset('wikitext', 'wikitext-103-v1')
+    wiki_dataset = load_dataset("NeelNanda/pile-10k")
     while len(sentence_list) < n:
         sentence = wiki_dataset["train"][random.randint(0, len(wiki_dataset["train"]))]["text"]
         # Cut off after a maximum of 20 words
@@ -70,7 +71,7 @@ def get_wiki_sentences(n: int = 5000) -> List[str]:
 
 def make_internals_func(layer_n: int, neuron_n: int):
     def compute_internals_single(model: HookedTransformer, input_txt: str) -> float:
-        tokens = model.to_tokens(input_txt)
+        tokens = model.to_tokens(input_txt, prepend_bos=False)
         _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)
         activations = cache["pre", layer_n, "mlp"]
         return activations[-1][neuron_n].tolist()
@@ -83,7 +84,8 @@ def make_all_internals(
         model: HookedTransformer, 
         sentence_list: List[str]
     ) -> Tuple[pd.DataFrame, Dict[str, Dict[str, List[int]]]]:
-    # Make dataframe with a column for each layer and neuron, with an entry for each full and partially tokenized sentence
+    # Make dataframe with a column for each layer and neuron, with an entry for each full and partially tokenized sentenc
+
 
     all_internals = []
     print(f"Computing internals for all {len(sentence_list)} sentences")
@@ -245,58 +247,25 @@ def score_condition_by_corr(
 class ExplainGame():
     def __init__(
             self, 
-            model: HookedTransformer, 
-            input_corpus: List[str], 
-            model_internals_func: Callable[[HookedTransformer, str], float], # Need a more flexible version which gets activations for each token
+            internals_fn: Callable[[int], Tuple[str, float]],
+            high_ndxs: List[int],
+            low_ndxs: List[int],
             eval_func: Callable[[str, BinaryCondition], float],
             agreement_func: Callable[[List[float], List[float]], float],
-            internals_loc: str,
             n_eval_trials = 5,
-            load_internals: bool = True,
         ):
         print("Initializing ExplainGame")
-        self.model = model
-        self.input_corpus = input_corpus
-        self.model_internals_func = model_internals_func
+        self.internals_fn = internals_fn
         self.eval_func = eval_func
         self.agreement_func = agreement_func
 
-        self.n_eval_trials = n_eval_trials
+        self.high_ndxs = high_ndxs
+        self.low_ndxs = low_ndxs
 
-        self.precompute_internals(internals_loc, load_internals)
-        self.low_prompts, self.high_prompts = self.get_low_high_prompts()
+        self.n_eval_trials = n_eval_trials
         print("Done initializing ExplainGame")
     
-    def precompute_internals(self, internals_loc: str, load_internals: bool):
-        if load_internals and os.path.exists(internals_loc):
-            print("Loading internals from file")
-            with open(internals_loc, "rb") as f:
-                self.internals = pickle.load(f)
-            
-            self.input_corpus = list(self.internals.keys())
-            return
-        
-        print("Computing internals")
-        self.internals = {}
-        n_duplicates = 0
-        for ndx, text in enumerate(self.input_corpus):
-            if text not in self.internals:
-                self.internals[text] = self.model_internals_func(self.model, text)
-            else:
-                n_duplicates += 1
-            
-            if ndx % 100 == 0:
-                print(f"Computed internals for {ndx} of {len(self.input_corpus)}")
 
-        print(f"Found {n_duplicates} duplicates")
-        print(f"Saving internals to {internals_loc}")
-        os.makedirs(os.path.dirname(internals_loc), exist_ok=True)
-        with open(internals_loc, "wb") as f:
-            pickle.dump(self.internals, f)
-
-        print("Done computing internals")
-        
-    
     def evaluate_explanation(self, explanation: BinaryCondition, n_trials: Optional[int] = None) -> float:
         # Principle here is that if the explanation looks good initially then we should run on a larger set of examples
         # and if it looks bad then we should run on a smaller set of examples then ignore
@@ -305,37 +274,37 @@ class ExplainGame():
             n_trials = self.n_eval_trials
 
         for _ in range(n_trials):
-            high_text = random.choice(self.high_prompts)
-            internal_val_h = self.internals[high_text]
+            high_text_ndx = random.choice(self.high_ndxs)
+            high_text, high_int_val = self.internals_fn(high_text_ndx)
             explanation_val_h = self.eval_func(high_text, explanation)
-            explanation.add_datapoint((internal_val_h, explanation_val_h))
+            explanation.add_datapoint((high_int_val, explanation_val_h))
 
-            low_text = random.choice(self.low_prompts)
-            internal_val_l = self.internals[low_text]
+            low_text_ndx = random.choice(self.low_ndxs)
+            low_text, low_int_val = self.internals_fn(low_text_ndx)
             explanation_val_l = self.eval_func(low_text, explanation)
-            explanation.add_datapoint((internal_val_l, explanation_val_l))
+            explanation.add_datapoint((low_int_val, explanation_val_l))
 
         explanation.update_score()
         return explanation.score
     
-    def get_low_high_prompts(self, max_prompts: int = 2000) -> Tuple[List[str], List[str]]:
-        # Get a list of prompts under which the model_internal_func returns a high value
-        # by creating a structure which stores the top n values found so far and removing the lowest value if a new value is found which is higher
+    def get_high_context(self, n: int = 10) -> List[str]:
+        ndxs = random.sample(list(self.high_ndxs), n)
+        contexts = []
+        for ndx in ndxs:
+            context, _ = self.internals_fn(ndx)
+            contexts.append(context)
         
-        sorted_vals = sorted(self.internals.items(), key=lambda x: x[1])
-        total_above_zero = sum([1 for x in sorted_vals if x[1] > 0])
-        n_high = min(total_above_zero // 2, max_prompts)
-        high_vals = sorted_vals[-n_high:]
-        print(f"Cutoff for high values is {high_vals[0][1]}, {len(high_vals)} values above this")
-        high_prompts = [x[0] for x in high_vals]
+        return contexts
 
-        total_n_low = len(self.internals) - total_above_zero # Number of values below the cutoff
-        all_low_vals = sorted_vals[:total_n_low] # All values below the cutoff
-        n_low = min(total_n_low, max_prompts) # Number of values to use
-        low_vals = random.sample(all_low_vals, n_low) # Sample n_low values
-        low_prompts = [x[0] for x in low_vals]
+    def get_low_context(self, n: int = 10) -> List[str]:
+        ndxs = random.sample(list(self.low_ndxs), n)
+        contexts = []
+        for ndx in ndxs:
+            context, _ = self.internals_fn(ndx)
+            contexts.append(context)
+        
+        return contexts
 
-        return low_prompts, high_prompts
     
     def evaluate_high_ucbs(self, bc_list: List[BinaryCondition], n_iters: int = 10):
         # Evaluate the high ucb conditions
@@ -355,25 +324,22 @@ def suggestion_generator(
 ) -> BinaryCondition:
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "You will first be shown a series of prompts under which a neuron in a langauge model is active, \
-         and a series of prompts under which the neuron is inactive. You will then be shown zero or more binary conditions which are hypotheses as to what may explain this behaviour and a \
-         score which judges how well the hypothesis explains the behaviour. For example \" The text ends in an incomplete word\", or \"The text is about sports.\". \
-         You will then be asked to suggest an improved binary condition in a single sentence which explains the behaviour. Some things to remember:,\n\
-         (1) this should try to explain the behaviour over all examples, not just one.\n\
-         (2) the neuron will predict the next token, so it will often relate to what likely to come next, e.g. \"the next word will be preposition\"\
-         (3) the condition can be negative as well as positive.\n\
-         (4) if there are good suggestions, say (score>0.3), you could try small variations on that theme,\n\
-         (5) we've tried many conditions, so don't be afraid to suggest something unusual."},
     ]
-
+    initial_instructions = "You will first be shown a series of prompts under which a neuron in a langauge model is active, " + \
+        "and a series of prompts under which the neuron is inactive. You will then be shown zero or more binary conditions which are hypotheses as to what may explain this behaviour and a " + \
+        "score which judges how well the hypothesis explains the behaviour. For example \"The text ends in an incomplete word\", or \"The text is about sports.\". " + \
+        "You will then be asked to suggest an improved binary condition in a single sentence which explains the behaviour. Some things to remember:\n" + \
+        "(1) this should try to explain the behaviour over all examples, not just one.\n" + \
+        "(2) the neuron will predict the next token, so it will often relate to what likely to come next, e.g. \"the next word will be preposition\"\n" + \
+        "(3) the condition can be negative as well as positive.\n" + \
+        "(4) if there are good suggestions, say (score>0.3), you could try small variations on that theme,\n" + \
+        "(5) we've tried many conditions, so don't be afraid to suggest something unusual."
+    
+    messages.append({"role": "user", "content": initial_instructions})
     messages.append({"role": "user", "content": "High prompts:"})
-    if len(high_prompts) > 3:
-        high_prompts = random.sample(high_prompts, 10)
     for prompt in high_prompts:
         messages.append({"role": "user", "content": prompt + "\n"})
     
-    if len(low_prompts) > 3:
-        low_prompts = random.sample(low_prompts, 10)
     messages.append({"role": "user", "content": "Low prompts:"})
     for prompt in low_prompts:
         messages.append({"role": "user", "content": prompt + "\n"})
@@ -404,6 +370,7 @@ def suggestion_generator(
 
     all_conditions = [sc.condition for sc in scored_conditions]
     found_new_condition = False
+
     while not found_new_condition:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -449,9 +416,12 @@ class GamePlayer():
         else:
             self.suggestions = []
 
-    
-    def run_turn(self):
-        new_condition = suggestion_generator(self.suggestions, self.game.high_prompts, self.game.low_prompts)
+
+    def run_turn(self) -> Tuple[str, List[float]]:
+        # Get a few low and high suggestions
+        low_contexts = self.game.get_low_context(n=3)
+        high_contexts = self.game.get_high_context(n=3)
+        new_condition = suggestion_generator(self.suggestions, high_contexts, low_contexts)
         print(f"New suggested condition: {new_condition.condition}")
         init_score = self.game.evaluate_explanation(new_condition)
         print(f"Initial score of condition: {init_score}")
@@ -467,7 +437,7 @@ class GamePlayer():
                     bc.update_score() # Only needed for runs saved before p-vals, can delete soon
                 print(f"Condition {ndx + 1}: {bc.condition}")
                 # Suspect that the appropriate Bonferroni correction is ~ total_datapoints / len(datapoints), might be nonsense
-                correction = len(self.suggestions * 19) / len(bc.datapoints) # 10 for initial conditions, 9 for new conditions
+                correction = len(self.suggestions * 22) / len(bc.datapoints) # 10 for initial conditions, 9 for new conditions
                 print(f"LCB: {bc.lcb:.3f}, Score: {bc.score:.3f}, P-val = {bc.p_val * correction:.6f}")
             print("\n")
 
@@ -477,13 +447,26 @@ class GamePlayer():
 
             with open(self.save_path, "w") as f:
                 json.dump([bc.to_dict() for bc in self.suggestions], f)
+        
+        # Returning the new condition and the yes/no values of the datapoints
+        return new_condition.condition, [dp[1] for dp in new_condition.datapoints]
+    
+def make_db_internals_fn(layer_n: int, neuron_n: int, internals: pd.DataFrame) -> Callable[[int], Tuple[str, float]]:
+    def db_internals_fn(ndx: int) -> Tuple[str, float]:
+        # Get index of text in internals
+        column_name = f"l{layer_n}n{neuron_n}"
+        sentence = internals.iloc[ndx]["context"]
+        internal_val = internals.iloc[ndx][column_name]
+        return sentence, internal_val
+
+    return db_internals_fn
 
 def main() -> None:
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--remake", type=bool, default=False)
     parser.add_argument("--load", type=bool, default=True)
-    parser.add_argument("--n_turns", type=int, default=10)
+    parser.add_argument("--n_turns", type=int, default=40)
     # parser.add_argument("--layer", type=int, default=-1)
     # parser.add_argument("--neuron", type=int, default=-1)
 
@@ -494,39 +477,58 @@ def main() -> None:
     # if args.layer == -1:
     #     args.layer = random.randint(0, 11)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HookedTransformer.from_pretrained("gpt2-large", device=device)
-
-    corpus = get_wiki_sentences()
+    model_size = "large"
 
     game_players: List[GamePlayer] = []
-    neurons = list(range(3))
-    layers = [5] * len(neurons)
 
-    for layer, neuron in zip(layers, neurons):
-        internals_func = make_internals_func(layer, neuron)
-        internals_loc = os.path.join("internals", f"layer_{layer}", f"neuron_{neuron}.pkl")
+    n_rng = (800, 900)
+    l_rng = (29, 31)
+    layers = list(range(*l_rng))
+    neurons = list(range(*n_rng))
+    n_sentences = 5000
+    
+    # Load the internals
+    internals_str = f"{model_size}_internals/s{n_sentences}_l{l_rng[0]}-{l_rng[1]}_n{n_rng[0]}-{n_rng[1]}"
+    full_internals_loc = internals_str + ".pkl"
+    internals_ndxs_loc = internals_str + "_ndxs.pkl"
+    
+    if not os.path.exists(full_internals_loc) or not os.path.exists(internals_ndxs_loc):
+        # loaded = download_from_aws([full_internals_loc, internals_ndxs_loc])
+        # print("Loaded from AWS: ", loaded)
+        # if not loaded:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = HookedTransformer.from_pretrained(f"gpt2-{model_size}", device=device)            
+        make_all_internals(layers, neurons, model, get_wiki_sentences(n=n_sentences))
+    
+    with open(full_internals_loc, "rb") as f:
+        internals = pickle.load(f)
+    
+    with open(internals_ndxs_loc, "rb") as f:
+        internals_ndxs = pickle.load(f)
 
+    for layer, neuron in list(itertools.product(layers, neurons))[90:100]:
+        internals_fn = make_db_internals_fn(layer, neuron, internals)
+        ndxs_dict = internals_ndxs[f"l{layer}n{neuron}"]
         game = ExplainGame(
-            model,
-            corpus,
-            model_internals_func=internals_func,
+            internals_fn=internals_fn,
+            high_ndxs=ndxs_dict["top"],
+            low_ndxs=ndxs_dict["neg"],
             eval_func=evaluate_prompt_single,
             agreement_func=score_condition_by_corr,
-            internals_loc=internals_loc,
-            load_internals= not args.remake
         )
 
         game_player = GamePlayer(game, layer, neuron, load=args.load)
         game_players.append(game_player)
-    
+
+
     for turn_ndx in range(args.n_turns):
         turn_ndx += 1
         print(f"Turn {turn_ndx}")
         for game_player in game_players:
-            game_player.run_turn()
+            new_condition, yesno_list = game_player.run_turn()
         
-        if turn_ndx % 1 == 0:
+
+        if turn_ndx % 5 == 0:
             results = []
             for game_player in game_players:
                 top_condition = sorted(game_player.suggestions, key=lambda x: x.lcb, reverse=True)[0]
@@ -556,18 +558,20 @@ def main() -> None:
 
             # Show only those with score > 0 and up to 6 total
             df = df[df["score"] > 0]
-            df = df[:6]
+            df = df[-6:]
 
             # Make large figure
             fig, ax = plt.subplots(figsize=(10, 5), )
 
             # Colours is purple if p_val < 1e-6, blue if p_val < 1e-4, green if p_val < 1e-2, yellow if p_val < 1e1, red if p_val > 1e1
-            colours = pd.Series(["red"] * len(df))
-            colours[df["p_val"] < 1e1] = "yellow"
-            colours[df["p_val"] < 1e-2] = "green"
-            colours[df["p_val"] < 1e-4] = "blue"
-            colours[df["p_val"] < 1e-6] = "purple"
-
+            try:
+                colours = pd.Series(["red"] * len(df))
+                colours[(df["p_val"] < 1e-1).tolist()] = "yellow"
+                colours[(df["p_val"] < 1e-2).tolist()] = "green"
+                colours[(df["p_val"] < 1e-4).tolist()] = "blue"
+                colours[(df["p_val"] < 1e-6).tolist()] = "purple"
+            except:
+                breakpoint()
 
             # Add colour legend
             legend_elements = [
@@ -594,23 +598,23 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # main()
+    main()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HookedTransformer.from_pretrained("gpt2-large", device=device)
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # model = HookedTransformer.from_pretrained("gpt2-large", device=device)
 
-    n_sentences = 5000
-    l_rng = (29, 31)
-    n_rng = (800, 900)
-    layers = list(range(*l_rng))
-    neurons = list(range(*n_rng))
+    # n_sentences = 5000
+    # l_rng = (29, 31)
+    # n_rng = (800, 900)
+    # layers = list(range(*l_rng))
+    # neurons = list(range(*n_rng))
 
-    df, ndxs_dict = make_all_internals(layers, neurons, model, sentence_list=get_wiki_sentences(n=n_sentences))
+    # df, ndxs_dict = make_all_internals(layers, neurons, model, sentence_list=get_wiki_sentences(n=n_sentences))
 
-    os.makedirs("large_internals", exist_ok=True)
-    # Save the dataframe
-    df.to_pickle(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}.pkl")
+    # os.makedirs("large_internals", exist_ok=True)
+    # # Save the dataframe
+    # df.to_pickle(f"large_internals/s{n_sentences}_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}.pkl")
 
-    # Save the ndxs_dict
-    with open(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}_ndxs.pkl", "wb") as f:
-        pickle.dump(ndxs_dict, f)
+    # # Save the ndxs_dict
+    # with open(f"large_internals/s{n_sentences}_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}_ndxs.pkl", "wb") as f:
+    #     pickle.dump(ndxs_dict, f)
