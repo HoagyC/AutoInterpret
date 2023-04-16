@@ -602,7 +602,10 @@ if __name__ == "__main__":
     n_sentences = 5000
     l_rng = (29, 31)
     n_rng = (800, 900)
-    df, ndxs_dict = make_all_internals([1,2,3], [1,2,3], model, sentence_list=get_wiki_sentences(n=n_sentences))
+    layers = list(range(*l_rng))
+    neurons = list(range(*n_rng))
+
+    df, ndxs_dict = make_all_internals(layers, neurons, model, sentence_list=get_wiki_sentences(n=n_sentences))
 
     os.makedirs("large_internals", exist_ok=True)
     # Save the dataframe
