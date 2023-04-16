@@ -600,13 +600,13 @@ if __name__ == "__main__":
     model = HookedTransformer.from_pretrained("gpt2-large", device=device)
 
     n_sentences = 5000
-    l_rng = (0, 12)
-    n_rng = (0, 100)
+    l_rng = (29, 31)
+    n_rng = (800, 900)
     df, ndxs_dict = make_all_internals([1,2,3], [1,2,3], model, sentence_list=get_wiki_sentences(n=n_sentences))
 
+    os.makedirs("large_internals", exist_ok=True)
     # Save the dataframe
     df.to_pickle(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}.pkl")
-
 
     # Save the ndxs_dict
     with open(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}_ndxs.pkl", "wb") as f:
