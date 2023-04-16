@@ -75,6 +75,55 @@ def make_internals_func(layer_n: int, neuron_n: int):
 
     return compute_internals_single
 
+def make_all_internals(layer_ndxs: List[int], neuron_ndxs: List[int], model: HookedTransformer, sentence_list: List[str]) -> Dict:
+    # Make dataframe with a column for each layer and neuron, with an entry for each full and partially tokenized sentence
+
+    all_internals = []
+    for sentence in sentence_list:
+        tokens = model.to_tokens(sentence)
+        _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)
+        for i in range(tokens.shape[1]):
+            partial_sentence = model.to_string(tokens[0,:i + 1])
+            partial_str_dict: Dict[str, float] = {}
+            partial_str_dict["sentence"] = partial_sentence
+            partial_str_dict["tokens"] = tokens[0, :i + 1].tolist()
+            for layer_n in layer_ndxs:
+                activations = cache["post", layer_n, "mlp"]
+                assert activations.shape[0] == tokens.shape[1]
+                for neuron_n in neuron_ndxs:
+                    partial_str_dict[f"l{layer_n}n{neuron_n}"] = activations[i][neuron_n].tolist()
+            
+            all_internals.append(partial_str_dict)
+    
+    # Make the dataframe
+    breakpoint()
+    df = pd.DataFrame(all_internals)
+
+
+
+    # Now we want to get a list of places where there are high and low activations for each neuron
+    # And return their indices so that we can access them quickly
+
+    for layer_n in layer_ndxs:
+        for neuron_n in neuron_ndxs:
+            # Get the indices of the top 10% activations (so long as they are positive) and sample from zero activations
+            activations = df[(layer_n, neuron_n)]
+            top_10pct = activations.quantile(0.9)
+            bottom_10pct = activations.quantile(0.1)
+            top_10pct_indices = df[(layer_n, neuron_n)] >= top_10pct
+            bottom_10pct_indices = df[(layer_n, neuron_n)] <= bottom_10pct
+            all_internals[(layer_n, neuron_n)] = {
+                "top_10pct_indices": top_10pct_indices,
+                "bottom_10pct_indices": bottom_10pct_indices
+            }
+
+
+
+        
+
+                
+    return all_internals
+
 class BinaryCondition():
     def __init__(
         self,
@@ -500,10 +549,11 @@ def main() -> None:
 
             # Colours is purple if p_val < 1e-6, blue if p_val < 1e-4, green if p_val < 1e-2, yellow if p_val < 1e1, red if p_val > 1e1
             colours = pd.Series(["red"] * len(df))
-            colours[df["p_val"] < 1e-6] = "purple"
-            colours[df["p_val"] < 1e-4] = "blue"
-            colours[df["p_val"] < 1e-2] = "green"
             colours[df["p_val"] < 1e1] = "yellow"
+            colours[df["p_val"] < 1e-2] = "green"
+            colours[df["p_val"] < 1e-4] = "blue"
+            colours[df["p_val"] < 1e-6] = "purple"
+
 
             # Add colour legend
             legend_elements = [
@@ -519,14 +569,21 @@ def main() -> None:
 
             ax.set_xlabel("Score")
             ax.set_ylabel("Neuron/condition")
-            ax.set_title("Top conditions for each neuron")
+            n_conditions = len(game_players[0].suggestions)
+            ax.set_title(f"Top conditions for each neuron after {n_conditions} suggestions")
 
             # Give lots of space for the descriptions
             # Make font smaller
             plt.rcParams.update({'font.size': 6})
             plt.subplots_adjust(left=0.5)
-            plt.savefig(f"graphs/top_conditions_{turn_ndx}.png")
+            plt.savefig(f"graphs/top_conditions_{n_conditions}.png")
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
+
+
+    make_all_internals([1,2,3], [1,2,3], model, sentence_list=get_wiki_sentences(n=100))
