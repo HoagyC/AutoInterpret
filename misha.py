@@ -15,19 +15,17 @@ import torch
 import tqdm
 from transformer_lens import HookedTransformer
 
-
-# %%
 import main
 
+BATCH_SIZE = 2
+
 # %%
+print("Loading model")
 model = HookedTransformer.from_pretrained(model_name=main.MODEL_ACTIVATIONS, device="cpu")
 
 # %%
+print("Loading dataset")
 dataset = datasets.load_dataset("NeelNanda/pile-10k")
-
-# %%
-dataset["train"][0]
-# %%
 dataset_texts = [row["text"] for row in dataset["train"]]
 
 # %%
@@ -64,9 +62,12 @@ def get_activations_batched(texts: List[str], batch_size: int = 32) -> Tuple[Lis
 
 
 # %%
-activations, next_tokens = get_activations_batched(dataset_texts[:4], batch_size=4)
-pickle.dump(activations, "activations.pickle")
-pickle.dump(next_tokens, "next_tokens.pickle")
+print("Getting activations")
+activations, next_tokens = get_activations_batched(dataset_texts, batch_size=BATCH_SIZE)
+with open("activations.pickle", "wb") as f:
+    pickle.dump(activations, f)
+with open("next_tokens.pickle", "wb") as f:
+    pickle.dump(next_tokens, f)
 
 # %%
 exit()
