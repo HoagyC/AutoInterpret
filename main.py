@@ -73,8 +73,10 @@ def get_wiki_sentences(n: int = 5000) -> List[str]:
 def make_internals_func(layer_n: int, neuron_n: int):
     def compute_internals_single(model: HookedTransformer, input_txt: str) -> float:
         tokens = model.to_tokens(input_txt)
+        # Remove the last token: We want the activations when the last token was predicted.
+        tokens = tokens[:, :-1]
         _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)
-        activations = cache["pre", layer_n, "mlp"]
+        activations = cache["post", layer_n, "mlp"]
         return activations[-1][neuron_n].tolist()
 
     return compute_internals_single
