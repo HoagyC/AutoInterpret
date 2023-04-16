@@ -21,7 +21,9 @@ BATCH_SIZE = 2
 
 # %%
 print("Loading model")
-model = HookedTransformer.from_pretrained(model_name=main.MODEL_ACTIVATIONS, device="cpu")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = HookedTransformer.from_pretrained(model_name=main.MODEL_ACTIVATIONS, device=device)
+model.eval()
 
 # %%
 print("Loading dataset")
@@ -58,7 +60,6 @@ def get_activations_batched(texts: List[str], batch_size: int = 32) -> Tuple[Lis
         activations.extend(batch_activations)
         next_tokens.extend(batch_next_tokens)
     return activations, next_tokens
-
 
 
 # %%
