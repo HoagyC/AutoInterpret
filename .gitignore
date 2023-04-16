@@ -4,6 +4,7 @@ saved/
 __pycache__/
 internals.pkl
 .vscode/settings.json
+.DS_Store
 
 found_conditions/
 graphs/

@@ -594,7 +594,8 @@ def main() -> None:
             # Make font smaller
             plt.rcParams.update({'font.size': 6})
             plt.subplots_adjust(left=0.5)
-            plt.savefig(f"graphs/top_conditions_{n_conditions}.png")
+
+            plt.savefig(f"graphs/l{l_rng[0]}-{l_rng[1]}_n{n_rng[0]}-{n_rng[1]}_top_conditions_{n_conditions}.png")
 
 
 if __name__ == "__main__":
