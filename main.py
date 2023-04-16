@@ -30,6 +30,8 @@ examples = [
     ("This piece of text is about sports", "The baseball team won the", "YES"),
     ("The final word of the prompt is \"and\"", "Canada is a member of the International", "NO"),
 ]
+MODEL_ACTIVATIONS = "gpt2-large"
+MODEL_CONDITION_GENERATION = "gpt-3.5-turbo"
 
 def make_base_message(examples: List[Tuple[str, str, str]] = []) -> List[Dict[str, str]]:
     messages = [
@@ -196,7 +198,7 @@ def evaluate_prompt_single(
         try:
             message.append({"role": "user", "content": f"Binary condition: '{binary_condition.condition}' Text: '{input_txt}' Answer:"})
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model=MODEL_CONDITION_GENERATION,
                 messages = message,
                 max_tokens=2,
             )
@@ -406,7 +408,7 @@ def suggestion_generator(
     found_new_condition = False
     while not found_new_condition:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=MODEL_CONDITION_GENERATION,
             messages = messages,
         )
 
@@ -495,7 +497,7 @@ def main() -> None:
     #     args.layer = random.randint(0, 11)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HookedTransformer.from_pretrained("gpt2-large", device=device)
+    model = HookedTransformer.from_pretrained(model_name=MODEL_ACTIVATIONS, device=device)
 
     corpus = get_wiki_sentences()
 
