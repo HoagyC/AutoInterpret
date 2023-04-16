@@ -6,12 +6,14 @@ import os
 import pickle
 import random
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import openai
 import pandas as pd
 import torch
+import tqdm
+
 
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
@@ -75,54 +77,66 @@ def make_internals_func(layer_n: int, neuron_n: int):
 
     return compute_internals_single
 
-def make_all_internals(layer_ndxs: List[int], neuron_ndxs: List[int], model: HookedTransformer, sentence_list: List[str]) -> Dict:
+def make_all_internals(
+        layer_ndxs: List[int], 
+        neuron_ndxs: List[int], 
+        model: HookedTransformer, 
+        sentence_list: List[str]
+    ) -> Tuple[pd.DataFrame, Dict[str, Dict[str, List[int]]]]:
     # Make dataframe with a column for each layer and neuron, with an entry for each full and partially tokenized sentence
 
     all_internals = []
-    for sentence in sentence_list:
+    print(f"Computing internals for all {len(sentence_list)} sentences")
+    for sentence in tqdm.tqdm(sentence_list):
         tokens = model.to_tokens(sentence)
         _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)
         for i in range(tokens.shape[1]):
             partial_sentence = model.to_string(tokens[0,:i + 1])
-            partial_str_dict: Dict[str, float] = {}
-            partial_str_dict["sentence"] = partial_sentence
-            partial_str_dict["tokens"] = tokens[0, :i + 1].tolist()
+            partial_str_dict: Dict[str, Any] = {}
+            partial_str_dict["context"] = partial_sentence
+            partial_str_dict["pre_tokens"] = tokens[0, :i + 1].tolist()
+            partial_str_dict["full_tokens"] = tokens[0, :].tolist()
+            partial_str_dict["sentence"] = sentence
+    
             for layer_n in layer_ndxs:
                 activations = cache["post", layer_n, "mlp"]
                 assert activations.shape[0] == tokens.shape[1]
                 for neuron_n in neuron_ndxs:
                     partial_str_dict[f"l{layer_n}n{neuron_n}"] = activations[i][neuron_n].tolist()
-            
+                
+
             all_internals.append(partial_str_dict)
-    
+
     # Make the dataframe
-    breakpoint()
     df = pd.DataFrame(all_internals)
-
-
 
     # Now we want to get a list of places where there are high and low activations for each neuron
     # And return their indices so that we can access them quickly
 
+    ndxs_dict = {}
+    n_ndxs = 1000
     for layer_n in layer_ndxs:
         for neuron_n in neuron_ndxs:
             # Get the indices of the top 10% activations (so long as they are positive) and sample from zero activations
-            activations = df[(layer_n, neuron_n)]
-            top_10pct = activations.quantile(0.9)
-            bottom_10pct = activations.quantile(0.1)
-            top_10pct_indices = df[(layer_n, neuron_n)] >= top_10pct
-            bottom_10pct_indices = df[(layer_n, neuron_n)] <= bottom_10pct
-            all_internals[(layer_n, neuron_n)] = {
-                "top_10pct_indices": top_10pct_indices,
-                "bottom_10pct_indices": bottom_10pct_indices
-            }
+            column_title = f"l{layer_n}n{neuron_n}"
+            activations = df[column_title]
 
-
-
+            # Get the top n_ndxs activations
+            top_ndxs = activations.nlargest(n_ndxs).index
+            # Check if they are all positive, if not, cut off the bottom ones
+            if not all(activations[top_ndxs] > 0):
+                top_ndxs = activations[top_ndxs][activations[top_ndxs] > 0].index
+                print(f"Cut off {n_ndxs - len(top_ndxs)} activations for layer {layer_n}, neuron {neuron_n} because they were negative, leaving {len(top_ndxs)} activations")
+            
+            # Sample n_ndxs activations where the activation is negative
+            neg_ndxs = activations[activations < 0].sample(n_ndxs).index
+            if len(neg_ndxs) < n_ndxs:
+                print(f"Only sampled {len(neg_ndxs)} negative activations for layer {layer_n}, neuron {neuron_n}, leaving {n_ndxs - len(neg_ndxs)} activations")
         
-
-                
-    return all_internals
+            # Add to the ndxs_dict
+            ndxs_dict[column_title] = {"top": top_ndxs, "neg": neg_ndxs}
+         
+    return df, ndxs_dict
 
 class BinaryCondition():
     def __init__(
@@ -481,7 +495,7 @@ def main() -> None:
     #     args.layer = random.randint(0, 11)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
+    model = HookedTransformer.from_pretrained("gpt2-large", device=device)
 
     corpus = get_wiki_sentences()
 
@@ -583,7 +597,17 @@ if __name__ == "__main__":
     # main()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
+    model = HookedTransformer.from_pretrained("gpt2-large", device=device)
+
+    n_sentences = 5000
+    l_rng = (0, 12)
+    n_rng = (0, 100)
+    df, ndxs_dict = make_all_internals([1,2,3], [1,2,3], model, sentence_list=get_wiki_sentences(n=n_sentences))
+
+    # Save the dataframe
+    df.to_pickle(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}.pkl")
 
 
-    make_all_internals([1,2,3], [1,2,3], model, sentence_list=get_wiki_sentences(n=100))
+    # Save the ndxs_dict
+    with open(f"large_internals/all_internals_{n_sentences}s_l{l_rng[0]}-{l_rng[1]}_{n_rng[0]}-{n_rng[1]}_ndxs.pkl", "wb") as f:
+        pickle.dump(ndxs_dict, f)
