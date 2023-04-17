@@ -31,6 +31,8 @@ examples = [
     ("This piece of text is about sports", "The baseball team won the", "YES"),
     ("The final word of the prompt is \"and\"", "Canada is a member of the International", "NO"),
 ]
+MODEL_ACTIVATIONS = "gpt2-large"
+MODEL_CONDITION_GENERATION = "gpt-3.5-turbo"
 
 def make_base_message(examples: List[Tuple[str, str, str]] = []) -> List[Dict[str, str]]:
     messages = [
@@ -71,9 +73,11 @@ def get_wiki_sentences(n: int = 5000) -> List[str]:
 
 def make_internals_func(layer_n: int, neuron_n: int):
     def compute_internals_single(model: HookedTransformer, input_txt: str) -> float:
-        tokens = model.to_tokens(input_txt, prepend_bos=False)
+        tokens = model.to_tokens(input_txt)
+        # Remove the last token: We want the activations when the last token was predicted.
+        tokens = tokens[:, :-1]
         _, cache = model.run_with_cache(tokens, return_type=None, remove_batch_dim=True)
-        activations = cache["pre", layer_n, "mlp"]
+        activations = cache["post", layer_n, "mlp"]
         return activations[-1][neuron_n].tolist()
 
     return compute_internals_single
@@ -198,7 +202,7 @@ def evaluate_prompt_single(
         try:
             message.append({"role": "user", "content": f"Binary condition: '{binary_condition.condition}' Text: '{input_txt}' Answer:"})
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model=MODEL_CONDITION_GENERATION,
                 messages = message,
                 max_tokens=2,
             )
@@ -373,7 +377,7 @@ def suggestion_generator(
 
     while not found_new_condition:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=MODEL_CONDITION_GENERATION,
             messages = messages,
         )
 
@@ -477,7 +481,7 @@ def main() -> None:
     # if args.layer == -1:
     #     args.layer = random.randint(0, 11)
 
-    model_size = "large"
+    corpus = get_wiki_sentences()
 
     game_players: List[GamePlayer] = []
 
@@ -488,7 +492,8 @@ def main() -> None:
     n_sentences = 5000
     
     # Load the internals
-    internals_str = f"{model_size}_internals/s{n_sentences}_l{l_rng[0]}-{l_rng[1]}_n{n_rng[0]}-{n_rng[1]}"
+    model_short_name = MODEL_ACTIVATIONS.split("-")[-1]
+    internals_str = f"{model_short_name}_internals/s{n_sentences}_l{l_rng[0]}-{l_rng[1]}_n{n_rng[0]}-{n_rng[1]}"
     full_internals_loc = internals_str + ".pkl"
     internals_ndxs_loc = internals_str + "_ndxs.pkl"
     
@@ -497,7 +502,7 @@ def main() -> None:
         # print("Loaded from AWS: ", loaded)
         # if not loaded:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = HookedTransformer.from_pretrained(f"gpt2-{model_size}", device=device)            
+        model = HookedTransformer.from_pretrained(MODEL_ACTIVATIONS, device=device)            
         make_all_internals(layers, neurons, model, get_wiki_sentences(n=n_sentences))
     
     with open(full_internals_loc, "rb") as f:
