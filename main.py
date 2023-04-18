@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 import copy
 from dataclasses import dataclass
 import itertools
@@ -603,8 +604,42 @@ def main() -> None:
             plt.savefig(f"graphs/l{l_rng[0]}-{l_rng[1]}_n{n_rng[0]}-{n_rng[1]}_top_conditions_{n_conditions}.png")
 
 
+def test_binary_consistency() -> None:
+    # Test the degree to which the model is self-consistent it its YES/NO responses
+    sentence_list: List[str] = get_wiki_sentences(n=100)
+    print(f"Loaded {len(sentence_list)} sentences")
+
+    # Load the binary conditions
+    with open("found_conditions/layer_29/neuron_800.json", "r") as f:
+        bin_conditions: List[BinaryCondition] = [BinaryCondition.from_dict(bc) for bc in json.load(f)][:5]
+    print(f"Loaded {len(bin_conditions)} binary conditions")
+    
+    results: Dict[str, int] = defaultdict(int)
+    for condition, sentence in tqdm.tqdm(itertools.product(bin_conditions, sentence_list)):
+        attempt_1 = evaluate_prompt_single(sentence, condition)
+        attempt_2 = evaluate_prompt_single(sentence, condition)
+        if attempt_1 and attempt_2:
+            results["yes-yes"] += 1
+        elif attempt_1 and not attempt_2 or not attempt_1 and attempt_2:
+            results["yes-no"] += 1
+        elif not attempt_1 and not attempt_2:
+            results["no-no"] += 1
+        else:
+            raise ValueError("This shouldn't happen")
+
+        
+    print(f"Results: {results}")
+    print(f"Proportion of yes-yes: {results['yes-yes'] / len(sentence_list)}")
+    print(f"Proportion of yes-no: {results['yes-no'] / len(sentence_list)}")
+    print(f"Proportion of no-no: {results['no-no'] / len(sentence_list)}")
+    print(f"Proportion of matches: {(results['yes-yes'] + results['no-no']) / len(sentence_list)}")
+
+    
+
+
 if __name__ == "__main__":
-    main()
+    test_binary_consistency()
+    # main()
 
     # device = "cuda" if torch.cuda.is_available() else "cpu"
     # model = HookedTransformer.from_pretrained("gpt2-large", device=device)
