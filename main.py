@@ -634,8 +634,13 @@ def test_binary_consistency() -> None:
     print(f"Proportion of no-no: {results['no-no'] / len(sentence_list)}")
     print(f"Proportion of matches: {(results['yes-yes'] + results['no-no']) / len(sentence_list)}")
 
-    
 
+def get_top_n_sentences(layer: int, neuron: int, n_sentences: int = 10):
+    neuron_str = f"l{layer}_n{neuron}"
+    # TODO: check through all pickles
+    internals_df = pd.read_pickle(f"large_internals/s5000_l29-31_800-900.pkl")
+    strs = [str(x) for x in internals_df.sort_values(by=neuron_str)["context"][-n_sentences:]]
+    return strs
 
 if __name__ == "__main__":
     test_binary_consistency()

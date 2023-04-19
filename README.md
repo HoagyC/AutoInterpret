@@ -46,7 +46,8 @@ The longest experiment we've run so far is running the system on neurons 810-840
 
 ![](public_graphs/l29_n810-840_top_conditions_20.png)
 
-For this neuron we can also see that the next best hypotheses were similar, and independently scored highly, increasing confidence that this is a meaningful pattern. 
+For this neuron we can also see that the next best hypotheses were similar, and independently scored highly, and we can also see from taking the sentences with the highest activations that there is in fact a clear pattern.
+![](public_graphs/l29n822_top_sentences.png)
 
 ![](public_graphs/l29n822biological.png)
 
