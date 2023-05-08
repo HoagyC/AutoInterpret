@@ -6,7 +6,11 @@ internals.pkl
 .vscode/settings.json
 .DS_Store
 
-found_conditions/
+found_conditions_large/
+found_conditions_small/
 graphs/
 internals/
+small_internals/
 large_internals/
+sentencedata*.pkl
+corpus*.pkl
